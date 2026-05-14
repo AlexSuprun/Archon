@@ -8,6 +8,8 @@ ORIGIN_REMOTE="origin"
 SYNC_BRANCH="dev"
 LAUNCHD_PLIST="$HOME/Library/LaunchAgents/com.archon.server.plist"
 LAUNCHD_LABEL="com.archon.server"
+SKILL_SRC="$REPO/.claude/skills/archon"
+SKILL_DST="$HOME/.claude/skills/archon"
 
 cd "$REPO"
 
@@ -57,6 +59,14 @@ bun install
 
 echo "==> Building web dist"
 bun --filter @archon/web build
+
+if [ -d "$SKILL_SRC" ]; then
+  echo "==> Syncing global Claude skill: $SKILL_DST"
+  mkdir -p "$SKILL_DST"
+  rsync -a --delete "$SKILL_SRC/" "$SKILL_DST/"
+else
+  echo "!! Skill source missing at $SKILL_SRC — skipping skill sync"
+fi
 
 echo "==> Starting launchd job $LAUNCHD_LABEL"
 launchctl load "$LAUNCHD_PLIST"
