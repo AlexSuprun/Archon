@@ -2,7 +2,7 @@ import { describe, test, expect, mock, spyOn } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
-import { mkdir, rm, writeFile } from 'fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { validationErrorHook } from './openapi-defaults';
@@ -13,7 +13,7 @@ function createTestApp(): OpenAPIHono {
   return new OpenAPIHono({ defaultHook: validationErrorHook });
 }
 
-const mockDiscoverWorkflows = mock(async (_cwd: string) => ({
+const mockDiscoverWorkflows = mock(async (_cwd: string | null) => ({
   workflows: [makeTestWorkflowWithSource({ name: 'deploy', description: 'Deploy app' }, 'bundled')],
   errors: [
     { filename: '/tmp/.archon/workflows/bad.md', error: 'invalid', errorType: 'parse_error' },
@@ -119,6 +119,30 @@ describe('GET /api/workflows', () => {
     expect(mockDiscoverWorkflows).toHaveBeenCalledWith('/tmp/project', expect.any(Function));
     expect(body.errors).toBeDefined();
     expect(Array.isArray(body.errors)).toBe(true);
+  });
+
+  test('falls back to null cwd when no cwd query and no codebases registered', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    // No registered codebases → handler should call discovery with null cwd
+    // so bundled + home-scoped workflows still surface.
+    mockListCodebases.mockImplementationOnce(async () => []);
+
+    const response = await app.request('/api/workflows');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as {
+      workflows: Array<{ workflow: { name: string }; source: string }>;
+    };
+
+    // Discovery is invoked with null (not skipped), so bundled defaults can surface.
+    expect(mockDiscoverWorkflows).toHaveBeenLastCalledWith(null, expect.any(Function));
+    // The mocked discovery returns one bundled workflow regardless of cwd, so the
+    // response is non-empty — proving the handler no longer short-circuits on no-cwd.
+    expect(Array.isArray(body.workflows)).toBe(true);
+    expect(body.workflows.length).toBeGreaterThan(0);
+    expect(body.workflows[0]?.source).toBe('bundled');
   });
 });
 
@@ -525,6 +549,65 @@ describe('PUT /api/workflows/:name', () => {
       await rm(testDir, { recursive: true, force: true });
     }
   });
+
+  test('saves valid workflow to ARCHON_HOME workflows when source=global', async () => {
+    const testArchonHome = join(tmpdir(), `archon-home-put-global-${Date.now()}`);
+    process.env.ARCHON_HOME = testArchonHome;
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      const response = await app.request('/api/workflows/global-workflow?source=global', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          definition: {
+            name: 'global-workflow',
+            description: 'Global workflow',
+            nodes: [{ id: 'plan', command: 'plan' }],
+          },
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        workflow: { name: string };
+        filename: string;
+        source: string;
+      };
+      expect(body.workflow).toBeDefined();
+      expect(body.filename).toBe('global-workflow.yaml');
+      expect(body.source).toBe('global');
+
+      const saved = await readFile(
+        join(testArchonHome, 'workflows', 'global-workflow.yaml'),
+        'utf-8'
+      );
+      expect(saved).toContain('name: global-workflow');
+    } finally {
+      delete process.env.ARCHON_HOME;
+      await rm(testArchonHome, { recursive: true, force: true });
+    }
+  });
+
+  test('returns 400 when source is not project or global', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const response = await app.request('/api/workflows/some-workflow?source=bundled', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        definition: {
+          name: 'some-workflow',
+          description: 'x',
+          nodes: [{ id: 'a', command: 'a' }],
+        },
+      }),
+    });
+    expect(response.status).toBe(400);
+  });
 });
 
 describe('DELETE /api/workflows/:name', () => {
@@ -590,6 +673,52 @@ describe('DELETE /api/workflows/:name', () => {
     } finally {
       await rm(testDir, { recursive: true, force: true });
     }
+  });
+
+  test('removes home-scoped workflow file when source=global', async () => {
+    const testArchonHome = join(tmpdir(), `archon-home-del-global-${Date.now()}`);
+    const workflowDir = join(testArchonHome, 'workflows');
+    await mkdir(workflowDir, { recursive: true });
+    await writeFile(
+      join(workflowDir, 'home-to-delete.yaml'),
+      'name: home-to-delete\ndescription: y\nnodes:\n  - id: z\n    command: z\n'
+    );
+
+    const prevArchonHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = testArchonHome;
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      const response = await app.request('/api/workflows/home-to-delete?source=global', {
+        method: 'DELETE',
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { deleted: boolean; name: string };
+      expect(body.deleted).toBe(true);
+      expect(body.name).toBe('home-to-delete');
+
+      // Confirm the file is gone from the home-scoped location.
+      const fsPromises = await import('fs/promises');
+      await expect(fsPromises.access(join(workflowDir, 'home-to-delete.yaml'))).rejects.toThrow();
+    } finally {
+      if (prevArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = prevArchonHome;
+      }
+      await rm(testArchonHome, { recursive: true, force: true });
+    }
+  });
+
+  test('returns 400 when source is not project or global', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const response = await app.request('/api/workflows/some-workflow?source=bundled', {
+      method: 'DELETE',
+    });
+    expect(response.status).toBe(400);
   });
 });
 

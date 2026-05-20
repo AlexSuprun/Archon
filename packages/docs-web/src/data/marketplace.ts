@@ -107,4 +107,40 @@ export const marketplaceEntries: MarketplaceEntry[] = [
     tags: ['automation'],
     archonVersionCompat: '>=0.3.0',
   },
+  {
+    slug: 'archon-idea-to-wo',
+    name: 'Idea to Work Orders',
+    author: 'lamachine',
+    description:
+      'Interactive 8-node workflow that turns a raw idea into BKM-format Work Orders through four AI phases with approval gates between each: understand the idea, scope and approach, risk and decomposition, generate WOs. Output is a directory of self-contained WO files ready to hand to archon-piv-loop.',
+    sourceUrl:
+      'https://github.com/coleam00/archon-idea-to-wo/tree/3b0d5d828a4cb375d50bb1252f5e016c44242d01/.archon',
+    sha: '3b0d5d828a4cb375d50bb1252f5e016c44242d01',
+    tags: ['planning', 'development'],
+    archonVersionCompat: '>=0.3.0',
+  },
+  {
+    slug: 'archon-smart-mr-review',
+    name: 'Smart GitLab MR Review',
+    author: 'lraphael',
+    description:
+      'GitLab counterpart to archon-smart-pr-review. Adaptive code review of a GitLab MR — Haiku classifies which review agents are relevant, runs them in parallel, posts resolvable Discussion threads, and auto-approves on 0 critical findings.',
+    sourceUrl:
+      'https://github.com/lraphael/archon-gitlab-workflows/tree/55ca73498f0ead87d86c22ef0efa67482b311700/archon-smart-mr-review',
+    sha: '55ca73498f0ead87d86c22ef0efa67482b311700',
+    tags: ['review', 'automation'],
+    archonVersionCompat: '>=0.3.0',
+  },
+  {
+    slug: 'archon-comprehensive-mr-review',
+    name: 'Comprehensive GitLab MR Review',
+    author: 'lraphael',
+    description:
+      'GitLab counterpart to archon-comprehensive-pr-review. Full code review of a GitLab MR — all 5 review agents (code-review, error-handling, test-coverage, comment-quality, docs-impact) run in parallel, posts resolvable Discussion threads, auto-approves on 0 critical findings.',
+    sourceUrl:
+      'https://github.com/lraphael/archon-gitlab-workflows/tree/6e39b359e1b02329ebf63f7d1699e6bbc8cb001f/archon-comprehensive-mr-review',
+    sha: '6e39b359e1b02329ebf63f7d1699e6bbc8cb001f',
+    tags: ['review', 'automation'],
+    archonVersionCompat: '>=0.3.0',
+  },
 ];
