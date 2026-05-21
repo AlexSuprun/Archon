@@ -1,0 +1,67 @@
+{
+  "workflow_version": "1.2.0",
+  "timestamps": {
+    "started": "2026-05-21T07:48:07Z",
+    "last_updated": "2026-05-21T07:55:00Z",
+    "completed": "2026-05-21T07:55:00Z"
+  },
+  "mode": "initial_scan",
+  "scan_level": "deep",
+  "project_root": "/Users/alexsuprun/my-code/archon/archon/.worktrees/feat--hc-workflows",
+  "project_knowledge": "docs",
+  "repository_type": "monorepo",
+  "project_parts": [
+    {"part_id": "backend", "display_name": "Backend services", "root_paths": ["packages/server", "packages/core", "packages/workflows", "packages/providers", "packages/adapters", "packages/isolation", "packages/git", "packages/paths"], "project_type_id": "backend"},
+    {"part_id": "frontend", "display_name": "Web UI (React)", "root_paths": ["packages/web"], "project_type_id": "web"},
+    {"part_id": "cli", "display_name": "Archon CLI", "root_paths": ["packages/cli"], "project_type_id": "cli"},
+    {"part_id": "documentation", "display_name": "Docs site (Astro/Starlight)", "root_paths": ["packages/docs-web"], "project_type_id": "web"}
+  ],
+  "project_types": [
+    {"part_id": "backend", "project_type_id": "backend", "display_name": "Backend services"},
+    {"part_id": "frontend", "project_type_id": "web", "display_name": "Web UI (React)"},
+    {"part_id": "cli", "project_type_id": "cli", "display_name": "Archon CLI"},
+    {"part_id": "documentation", "project_type_id": "web", "display_name": "Docs site"}
+  ],
+  "completed_steps": [
+    {"step": "step_1", "status": "completed", "timestamp": "2026-05-21T07:48:07Z", "summary": "Classified as monorepo with 4 user-defined parts (backend/frontend/cli/documentation)"},
+    {"step": "step_2", "status": "completed", "timestamp": "2026-05-21T07:50:00Z", "summary": "Existing docs inventoried: README, CONTRIBUTING, SECURITY, CLAUDE.md (46KB), CHANGELOG, docs-web 50+ MDX pages, .claude/docs/architecture-deep-dive.md"},
+    {"step": "step_3", "status": "completed", "timestamp": "2026-05-21T07:50:30Z", "summary": "Tech stacks per part: backend=Bun+Hono+Zod+Pino+SQLite/PG; frontend=React19+Vite6+Tailwind4+Zustand+TanQuery+XYFlow; cli=Bun+clack; documentation=Astro6+Starlight"},
+    {"step": "step_4", "status": "completed", "timestamp": "2026-05-21T07:51:30Z", "summary": "Conditional scans complete: ~40 REST routes documented, 8 DB tables documented, frontend component inventory built, integration patterns identified"},
+    {"step": "step_5", "status": "completed", "timestamp": "2026-05-21T07:52:00Z", "summary": "Source tree annotated; 11 workspaces under packages/, support dirs (migrations, .archon, .claude, examples, scripts, deploy, homebrew, auth-service)"},
+    {"step": "step_6", "status": "completed", "timestamp": "2026-05-21T07:52:30Z", "summary": "Development guide (commands, env vars, test isolation rules, pre-PR validate); deployment guide (source, docker, binary, homebrew, caddy); contribution guide (PRs, branching, principles)"},
+    {"step": "step_7", "status": "completed", "timestamp": "2026-05-21T07:53:00Z", "summary": "Integration architecture: 3 sequence diagrams (web chat, GitHub webhook, CLI workflow), inter-part matrix, external integrations table"},
+    {"step": "step_8", "status": "completed", "timestamp": "2026-05-21T07:53:30Z", "summary": "Per-part architecture docs: backend (with package dep graph), frontend (route map + data flow), cli (commands + execution patterns), documentation (sections)"},
+    {"step": "step_9", "status": "completed", "timestamp": "2026-05-21T07:54:00Z", "summary": "Supporting docs: project-overview, source-tree-analysis, component-inventory, development-guide, deployment-guide, contribution-guide, api-contracts, data-models"},
+    {"step": "step_10", "status": "completed", "timestamp": "2026-05-21T07:54:30Z", "summary": "Master index.md generated with all links + existing-docs section"},
+    {"step": "step_11", "status": "completed", "timestamp": "2026-05-21T07:55:00Z", "summary": "Validation: 0 incomplete markers, all 15 artifacts written"},
+    {"step": "step_12", "status": "completed", "timestamp": "2026-05-21T07:55:00Z", "summary": "Workflow complete"}
+  ],
+  "current_step": "completed",
+  "findings": {
+    "project_classification": "monorepo, 4 parts, Bun+TypeScript+React+Astro",
+    "api_routes_documented": 40,
+    "db_tables_documented": 8,
+    "files_generated": 15,
+    "existing_docs_inventory": "README, CONTRIBUTING, SECURITY, CLAUDE.md, CHANGELOG, docs-web (50+ MDX), .claude/docs, .archon/maintainer-standup, examples/workflows",
+    "visualization_format": "mermaid (per user preference set during run)"
+  },
+  "outputs_generated": [
+    "project-scan-report.json",
+    "index.md",
+    "project-overview.md",
+    "architecture.md",
+    "architecture-backend.md",
+    "architecture-frontend.md",
+    "architecture-cli.md",
+    "architecture-documentation.md",
+    "integration-architecture.md",
+    "source-tree-analysis.md",
+    "component-inventory.md",
+    "api-contracts.md",
+    "data-models.md",
+    "development-guide.md",
+    "deployment-guide.md",
+    "contribution-guide.md"
+  ],
+  "resume_instructions": "Workflow complete. To regenerate, archive this file and re-run the skill."
+}
