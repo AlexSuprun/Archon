@@ -4,7 +4,7 @@
  * Both CLI and command-handler are thin formatting adapters over these functions.
  * Operations throw on errors; callers catch and format for their platform.
  */
-import { createLogger } from '@archon/paths';
+import { createLogger, captureApprovalResolved } from '@archon/paths';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   TERMINAL_WORKFLOW_STATUSES,
@@ -13,6 +13,7 @@ import {
 import type { WorkflowRun, ApprovalContext } from '@archon/workflows/schemas/workflow-run';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
+import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
 
 // Lazy logger — NEVER at module scope
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -160,6 +161,8 @@ export async function approveWorkflow(
         step_name: approval.nodeId,
         data: { decision: 'approved', comment: approvalComment, iteration: approval.iteration },
       });
+      // Anonymous telemetry: binary resolution only — no ids/comments/names.
+      captureApprovalResolved({ resolution: 'approved' });
       // Transition to 'failed' so findResumableRun picks it up.
       // IMPORTANT: metadata is MERGED (not replaced) — the approval context must survive
       // intact so the resumed executor can detect the correct startIteration.
@@ -191,6 +194,8 @@ export async function approveWorkflow(
       step_name: approval.nodeId,
       data: { decision: 'approved', comment: approvalComment },
     });
+    // Anonymous telemetry: binary resolution only — no ids/comments/names.
+    captureApprovalResolved({ resolution: 'approved' });
     // Transition to 'failed' so findResumableRun picks it up. Clear any rejection state.
     await workflowDb.updateWorkflowRun(runId, {
       status: 'failed',
@@ -245,6 +250,8 @@ export async function rejectWorkflow(
       step_name: approval?.nodeId ?? 'unknown',
       data: { decision: 'rejected', reason: rejectReason },
     });
+    // Anonymous telemetry: binary resolution only — no ids/reasons/names.
+    captureApprovalResolved({ resolution: 'rejected' });
 
     if (approval?.onRejectPrompt !== undefined) {
       if (currentCount + 1 >= maxAttempts) {
@@ -292,4 +299,30 @@ export async function rejectWorkflow(
     cancelled: true,
     maxAttemptsReached: false,
   };
+}
+
+/**
+ * Reset persisted per-node provider sessions for a workflow.
+ *
+ * Filter: workflow_name is required; scope_key narrows to one conversation (or
+ * other scope), node_id narrows to one node within that scope. Omitting both
+ * scope_key and node_id deletes every row for the workflow across all scopes.
+ *
+ * Returns the row count deleted.
+ */
+export async function resetWorkflowNodeSessions(filter: {
+  workflow_name: string;
+  scope_key?: string;
+  node_id?: string;
+}): Promise<{ deleted: number }> {
+  try {
+    return await workflowNodeSessionDb.deleteWorkflowNodeSessions(filter);
+  } catch (error) {
+    const err = error as Error;
+    getLog().error(
+      { err, errorType: err.constructor.name, ...filter },
+      'operations.workflow_reset_node_sessions_failed'
+    );
+    throw new Error(`Failed to reset workflow node sessions: ${err.message}`);
+  }
 }
