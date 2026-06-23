@@ -56,6 +56,8 @@
 - [Development Guide](./development-guide.md)
 - [Deployment Guide](./deployment-guide.md)
 - [Contribution Guide](./contribution-guide.md)
+- [Glossary (Users)](./glossary.md)
+- [Glossary (Developers)](./dev-glossary.md)
 
 ## Existing Documentation (already in repo)
 
