@@ -86,10 +86,12 @@ import {
 } from './executor-shared';
 import {
   isLiteralSpec,
+  isTierName,
   resolveModelSpec,
   routePresetEffort,
   type ModelAliasPreset,
   type ResolvedAiProfile,
+  type TierName,
 } from './model-validation';
 
 /**
@@ -273,6 +275,9 @@ interface WorkflowLevelOptions {
   fallbackModel?: string;
   betas?: string[];
   sandbox?: SandboxSettings;
+  /** Workflow-level tier keyword (when `workflow.model` is small/medium/large), so
+   *  nodes that inherit the workflow model can still surface the `← tier` annotation. */
+  workflowTier?: 'small' | 'medium' | 'large';
 }
 
 /** Internal node execution result — extends NodeOutput with cost data for aggregation. */
@@ -471,6 +476,7 @@ async function resolveNodeProviderAndModel(
   provider: string;
   model: string | undefined;
   options: SendQueryOptions | undefined;
+  tier?: TierName;
 }> {
   const configuredProvider: string = node.provider ?? workflowProvider;
   let provider: string = configuredProvider;
@@ -645,7 +651,18 @@ async function resolveNodeProviderAndModel(
     assistantConfig,
   };
 
-  return { provider, model, options };
+  // `node.model` is the original ref (e.g. "large"); `model` is the resolved
+  // string (e.g. "opus"). Surface `tier` when the ref was a tier keyword — from
+  // the node's own `model`, or (when the node inherits the workflow-level model)
+  // from the workflow tier, mirroring the effectivePreset inheritance condition.
+  const tier: 'small' | 'medium' | 'large' | undefined =
+    node.model && isTierName(node.model)
+      ? node.model
+      : !node.model && provider === workflowProvider
+        ? workflowLevelOptions.workflowTier
+        : undefined;
+
+  return { provider, model, options, tier };
 }
 
 /** Evaluate trigger rule for a node given its upstream states */
@@ -753,7 +770,9 @@ async function executeNodeInternal(
   nodeOutputs: Map<string, NodeOutput>,
   resumeSessionId: string | undefined,
   configuredCommandFolder?: string,
-  issueContext?: string
+  issueContext?: string,
+  resolvedModel?: string,
+  resolvedTier?: TierName
 ): Promise<NodeExecutionResult> {
   const nodeStartTime = Date.now();
   const nodeContext: SendMessageContext = { workflowId: workflowRun.id, nodeName: node.id };
@@ -768,7 +787,7 @@ async function executeNodeInternal(
       workflow_run_id: workflowRun.id,
       event_type: 'node_started',
       step_name: node.id,
-      data: { command: node.command ?? null, provider },
+      data: { command: node.command ?? null, provider, model: resolvedModel, tier: resolvedTier },
     })
     .catch((err: Error) => {
       getLog().error(
@@ -783,6 +802,9 @@ async function executeNodeInternal(
     runId: workflowRun.id,
     nodeId: node.id,
     nodeName: node.command ?? node.id,
+    provider,
+    model: resolvedModel,
+    tier: resolvedTier,
   });
 
   // Load prompt
@@ -855,6 +877,7 @@ async function executeNodeInternal(
   let nodeOutputText = ''; // Always accumulate regardless of streaming mode
   let structuredOutput: unknown;
   let newSessionId: string | undefined;
+  let nodeResumed: boolean | undefined;
   let nodeTokens: TokenUsage | undefined;
   let nodeCostUsd: number | undefined;
   let nodeStopReason: string | undefined;
@@ -1079,6 +1102,7 @@ async function executeNodeInternal(
           lastToolStartedAt = null;
         }
         if (msg.sessionId) newSessionId = msg.sessionId;
+        if (msg.resumed !== undefined) nodeResumed = msg.resumed;
         if (msg.tokens) nodeTokens = msg.tokens;
         if (msg.cost !== undefined) nodeCostUsd = msg.cost;
         if (msg.stopReason !== undefined) nodeStopReason = msg.stopReason;
@@ -1181,6 +1205,160 @@ async function executeNodeInternal(
             'dag.system_message_unhandled'
           );
         }
+      } else if (msg.type === 'task_started') {
+        // Subagent task spawned inside this node (Claude Task tool or
+        // inline sub-agent). Forward as a task_activity emitter event so
+        // the Web UI can render it as an expandable sub-item under the
+        // parent node in the run detail view.
+        getWorkflowEventEmitter().emit({
+          type: 'task_activity',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          taskId: msg.taskId,
+          activity: 'started',
+          ...(msg.description !== undefined ? { description: msg.description } : {}),
+          ...(msg.taskType !== undefined ? { taskType: msg.taskType } : {}),
+        });
+        deps.store
+          .createWorkflowEvent({
+            workflow_run_id: workflowRun.id,
+            event_type: 'task_activity',
+            step_name: node.id,
+            data: {
+              task_id: msg.taskId,
+              activity: 'started',
+              ...(msg.description !== undefined ? { description: msg.description } : {}),
+              ...(msg.taskType !== undefined ? { task_type: msg.taskType } : {}),
+            },
+          })
+          .catch((err: Error) => {
+            getLog().error(
+              { err, workflowRunId: workflowRun.id, eventType: 'task_activity' },
+              'workflow_event_persist_failed'
+            );
+          });
+      } else if (msg.type === 'task_progress') {
+        getWorkflowEventEmitter().emit({
+          type: 'task_activity',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          taskId: msg.taskId,
+          activity: 'progress',
+          ...(msg.description !== undefined ? { description: msg.description } : {}),
+          ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
+          ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
+          ...(msg.lastToolName !== undefined ? { lastToolName: msg.lastToolName } : {}),
+        });
+        // task_progress fires every ~30s while a subagent is running. Persist
+        // it for the timeline view but don't log — the volume would dominate.
+        deps.store
+          .createWorkflowEvent({
+            workflow_run_id: workflowRun.id,
+            event_type: 'task_activity',
+            step_name: node.id,
+            data: {
+              task_id: msg.taskId,
+              activity: 'progress',
+              ...(msg.description !== undefined ? { description: msg.description } : {}),
+              ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
+              ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
+              ...(msg.lastToolName !== undefined ? { last_tool_name: msg.lastToolName } : {}),
+            },
+          })
+          .catch((err: Error) => {
+            getLog().error(
+              { err, workflowRunId: workflowRun.id, eventType: 'task_activity' },
+              'workflow_event_persist_failed'
+            );
+          });
+      } else if (msg.type === 'task_notification') {
+        getWorkflowEventEmitter().emit({
+          type: 'task_activity',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          taskId: msg.taskId,
+          activity: msg.status,
+          ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
+          ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
+        });
+        deps.store
+          .createWorkflowEvent({
+            workflow_run_id: workflowRun.id,
+            event_type: 'task_activity',
+            step_name: node.id,
+            data: {
+              task_id: msg.taskId,
+              activity: msg.status,
+              ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
+              ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
+            },
+          })
+          .catch((err: Error) => {
+            getLog().error(
+              { err, workflowRunId: workflowRun.id, eventType: 'task_activity' },
+              'workflow_event_persist_failed'
+            );
+          });
+      } else if (msg.type === 'hook_started') {
+        getWorkflowEventEmitter().emit({
+          type: 'hook_activity',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          hookId: msg.hookId,
+          hookName: msg.hookName,
+          hookEvent: msg.hookEvent,
+          activity: 'started',
+        });
+        deps.store
+          .createWorkflowEvent({
+            workflow_run_id: workflowRun.id,
+            event_type: 'hook_activity',
+            step_name: node.id,
+            data: {
+              hook_id: msg.hookId,
+              hook_name: msg.hookName,
+              hook_event: msg.hookEvent,
+              activity: 'started',
+            },
+          })
+          .catch((err: Error) => {
+            getLog().error(
+              { err, workflowRunId: workflowRun.id, eventType: 'hook_activity' },
+              'workflow_event_persist_failed'
+            );
+          });
+      } else if (msg.type === 'hook_response') {
+        getWorkflowEventEmitter().emit({
+          type: 'hook_activity',
+          runId: workflowRun.id,
+          nodeId: node.id,
+          hookId: msg.hookId,
+          hookName: msg.hookName,
+          hookEvent: msg.hookEvent,
+          activity: 'response',
+          outcome: msg.outcome,
+          ...(msg.exitCode !== undefined ? { exitCode: msg.exitCode } : {}),
+        });
+        deps.store
+          .createWorkflowEvent({
+            workflow_run_id: workflowRun.id,
+            event_type: 'hook_activity',
+            step_name: node.id,
+            data: {
+              hook_id: msg.hookId,
+              hook_name: msg.hookName,
+              hook_event: msg.hookEvent,
+              activity: 'response',
+              outcome: msg.outcome,
+              ...(msg.exitCode !== undefined ? { exit_code: msg.exitCode } : {}),
+            },
+          })
+          .catch((err: Error) => {
+            getLog().error(
+              { err, workflowRunId: workflowRun.id, eventType: 'hook_activity' },
+              'workflow_event_persist_failed'
+            );
+          });
       }
       // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
     }
@@ -1510,6 +1688,7 @@ async function executeNodeInternal(
       ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
       ...(structuredOutput !== undefined ? { structuredOutput } : {}),
       ...(declaredFields !== undefined ? { declaredFields } : {}),
+      ...(nodeResumed !== undefined ? { resumed: nodeResumed } : {}),
     };
   } catch (error) {
     const err = error as Error;
@@ -2126,14 +2305,8 @@ async function executeLoopNode(
         logEventStoreError(err, i);
       });
 
-    // Session threading. Force a fresh session on the first iteration of an
-    // interactive loop resume: the stored session id from the gate metadata
-    // may be stale after a human review wait — passing it to the SDK can
-    // trigger errors (e.g. error_during_execution on Claude SDK).
-    // User feedback is carried via $LOOP_USER_INPUT, so session continuity is
-    // not required for the first resumed iteration.
-    const needsFreshSession =
-      loop.fresh_context || i === 1 || (isLoopResume && i === startIteration);
+    // Session threading
+    const needsFreshSession = loop.fresh_context || i === 1;
     const resumeSessionId = needsFreshSession ? undefined : currentSessionId;
 
     // Stream AI response for this iteration
@@ -2774,7 +2947,12 @@ async function executeApprovalNode(
       ...(node.idle_timeout ? { idle_timeout: node.idle_timeout } : {}),
     };
 
-    const { provider, options: nodeOptions } = await resolveNodeProviderAndModel(
+    const {
+      provider,
+      model: resolvedNodeModel,
+      options: nodeOptions,
+      tier: resolvedTier,
+    } = await resolveNodeProviderAndModel(
       syntheticNode,
       workflowProvider,
       workflowModel,
@@ -2804,7 +2982,9 @@ async function executeApprovalNode(
       nodeOutputs,
       undefined, // fresh session
       configuredCommandFolder,
-      issueContext
+      issueContext,
+      resolvedNodeModel,
+      resolvedTier
     );
 
     if (output.state === 'failed') {
@@ -2872,6 +3052,9 @@ export async function executeDagWorkflow(
     nodes: readonly DagNode[];
     /** Workflow-level default for per-node `persist_session` (read directly here). */
     persist_sessions?: boolean;
+    /** Raw workflow-level `model` ref — used only to derive the workflow tier
+     *  keyword for node_started attribution (resolution uses `workflowModel`). */
+    model?: string;
   } & WorkflowLevelOptions,
   workflowRun: WorkflowRun,
   workflowProvider: string,
@@ -2890,12 +3073,14 @@ export async function executeDagWorkflow(
   workflowPreset?: ModelAliasPreset
 ): Promise<string | undefined> {
   const dagStartTime = Date.now();
+  const workflowTier = workflow.model && isTierName(workflow.model) ? workflow.model : undefined;
   const workflowLevelOptions = {
     effort: workflow.effort,
     thinking: workflow.thinking,
     fallbackModel: workflow.fallbackModel,
     betas: workflow.betas,
     sandbox: workflow.sandbox,
+    workflowTier,
   };
   const layers = buildTopologicalLayers(workflow.nodes);
   const nodeOutputs = new Map<string, NodeOutput>();
@@ -3278,7 +3463,12 @@ export async function executeDagWorkflow(
           }
 
           // 4. Resolve per-node provider/model/options
-          const { provider, options: nodeOptions } = await resolveNodeProviderAndModel(
+          const {
+            provider,
+            model: resolvedNodeModel,
+            options: nodeOptions,
+            tier: resolvedTier,
+          } = await resolveNodeProviderAndModel(
             node,
             workflowProvider,
             workflowModel,
@@ -3405,7 +3595,9 @@ export async function executeDagWorkflow(
               // ensures the source is never mutated, so retries can safely resume from it.
               resumeSessionId,
               configuredCommandFolder,
-              issueContext
+              issueContext,
+              resolvedNodeModel,
+              resolvedTier
             );
 
             if (output.state !== 'failed') break;
@@ -3444,6 +3636,38 @@ export async function executeDagWorkflow(
             );
 
             await new Promise(resolve => setTimeout(resolve, delayMs));
+          }
+
+          // Cold-resume surfacing: this node requested a session resume but the
+          // provider reported it came back cold (resumed === false) — the prior
+          // context is gone. Every provider's cold fallback is already a clean
+          // fresh session, so the run we just completed is a valid fresh-context
+          // result; we keep it and persist its fresh session id below. Surface the
+          // lost continuity to the user (no silent failure) so a degraded run isn't
+          // mistaken for a normal resumed one — but do NOT re-run: a replay would
+          // only repeat the same fresh run at double the cost and side effects.
+          if (
+            resumeSessionId !== undefined &&
+            output.state === 'completed' &&
+            output.resumed === false
+          ) {
+            // Mask the session id: it's a resumable artifact, so log only an
+            // 8-char preview (same policy as the node_session_resumed event above).
+            getLog().warn(
+              {
+                nodeId: node.id,
+                provider,
+                workflowRunId: workflowRun.id,
+                resumeSessionId: `${resumeSessionId.slice(0, 8)}…`,
+              },
+              'dag.session_resume_failed'
+            );
+            await safeSendMessage(
+              platform,
+              conversationId,
+              `⚠️ Node \`${node.id}\`: could not resume the prior session — continued with a fresh session, so the earlier context was not restored.`,
+              { workflowId: workflowRun.id, nodeName: node.id }
+            );
           }
 
           // Persist (or drop) the node's provider session ID for the next run in this scope.
